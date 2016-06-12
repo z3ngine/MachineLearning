@@ -1,30 +1,75 @@
 ---
-title: "Machine Learning Assignment"
+title: "Machine Learning - Prediction Assignment"
 author: "Angus Fry"
 date: "12 June 2016"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+## Executive Summary
+This assignment makes use of the Weight Lifting Dataset from the Human Activity Recognition (HAR) data [Click here for more information on HAR Data](http://groupware.les.inf.puc-rio.br/har).  The data is from the study by Velloso, Bulling, Gellersen, Ugulino and Fuks, in using personal activity trackers (like FitBits) to track exercise movement during a set weight lifting activity.  The data contains, along with all of the raw results, an indicator (Classe) judging how well the exercise was performed.
+
+This assignment demonstrates how to build a prediction model that can predict this indictaor (Classe) based on the raw data recorded.  It shows one successful approach utilising R, the CARET package, Random Forest modelling with full Bootstrap resampling.
+
+```{r setup}
+library(caret)
+set.seed(120616)
 ```
 
-## R Markdown
+## Data Preprocessing
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+The raw data contains a lot of noise that contributes to long processing times and unuseful outcomes.  After first reading in the raw data, I remove any columns with more than 10 occurrences of ("NA" or "#DIV/0!") as, when they appear, they form the majority of values for that column.
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+Further, the original data contains a row number (X).  In another model I built for this assignment (using Recursive Partitioning) it revealed that the data had been grouped by the predicted value "classe", leading to an unuseful correlation to this X value (eg. low X value will always result in Classe "A").  This column is also removed prior to training the learning model.
 
-```{r cars}
-summary(cars)
+It is reasonable to assume that subjects improved their technique as the date advanced, but the date of exercise is unlikely to be a reliable predictor.  While I left these dates in, I could have improved the training data even further by removing everything except the raw sensor data.
+
+```{r preproc, cache=TRUE}
+pmlData <- read.csv("pml-training.csv",na.strings = c("NA","#DIV/0!"))
+#strip out any columns with more than 10 NAs (they are junk!) - reduces 160 cols to just 60 !
+pmlNarrow <- pmlData[, colSums(is.na(pmlData)) <= 10]
+#classe is grouped in the data, so X (col 1) is a tempting predictor
+pmlNarrow <- pmlNarrow[,-1]
 ```
 
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
+## Training/Test Data
+Based on the clean dataset pmlNarrow, we take a 70/30 split for the training and testing activities:
+```{r datasets, cache=TRUE}
+inTrain = createDataPartition(pmlNarrow$classe, p = 0.7, list=FALSE)
+train <- pmlNarrow[inTrain,]
+testing <- pmlNarrow[-inTrain,]
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+## Prediction Model
+
+After experimenting with some different modelling methods, random forests performed very well in terms of accuracy.  Unfortunately the trade-off was in performance when training the model.  I found a reasonable trade-off under the following conditions:  
+- Using random forest method "boot" - bootstrap sampling (with replacement) to minimise outlier effects, and build the most general model possible from the training set.  
+- restricting the number of trees built on each pass to 20.
+
+```{r modelBuild, cache=TRUE}
+fit_rfboot <- train(classe~.
+                , method="rf"
+                , data=train
+                , trControl=trainControl(method="boot")
+                , ntree = 20
+                # Watching the trace gives me confidence that it's progressing
+                #, do.trace = TRUE
+                , prox=TRUE
+                , allowParallel=TRUE)
+```
+
+## Assessing the Model
+
+The resulting model reports the following statistics:
+```{r modelRaw, cache=TRUE}
+print(fit_rfboot)
+```
+
+Although the model reports good accuracy (`r format(fit_rfboot$results$Accuracy[2]*100,digits=4)`%) over the training set, it could suffer from overfitting - being too specific to the train data provided.  A better measurement of accuracy is to evalute the model using the separate testing dataset.  First I make a prediction of the "Classe" outcome over the testing dataset, then use confusionMatrix() to evaluate the prediction against the actual outcomes:
+```{r crossVal, cache=TRUE}
+pred_rfboot<- predict(fit_rfboot, testing)
+confusionMatrix(pred_rfboot, testing$classe)
+```
+
+The results of the prediction model appear very good with an overall accuracy of `r format(confusionMatrix(pred_rfboot, testing$classe)$overall['Accuracy']*100,digits=4)`% when run and evaluated against the testing dataset.  
+
+---------------------------------------------------------------------------------------------------------
